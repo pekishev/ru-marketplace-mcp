@@ -2,7 +2,8 @@
 
 All tunable parameters are configurable via environment variables with a WB_
 prefix, e.g. WB_TIMEOUT, WB_WALL_TIMEOUT, WB_MIN_GAP, WB_DEFAULT_DEST,
-WB_MAX_BODY_BYTES, WB_NET_RETRIES, WB_NET_BACKOFF_S, WB_CACHE_TTL, WB_PROXY.
+WB_MAX_BODY_BYTES, WB_NET_RETRIES, WB_NET_BACKOFF_S, WB_CACHE_TTL, WB_PROXY,
+WB_CDP_FALLBACK.
 
 WB public catalog APIs need no credentials, so this settings object holds only
 operational knobs — timeouts, rate-limit gap, retry budget, body-size cap, cache
@@ -72,6 +73,13 @@ class WBSettings(BaseSettings):
             "Optional proxy URL. Empty means honour the standard HTTPS_PROXY/ALL_PROXY variables. "
             "May carry user:pass credentials, so it is a SecretStr: repr/dump show '**********', "
             "and only the outbound fetch ever unwraps it."
+        ),
+    )
+    cdp_fallback: bool = Field(
+        default=True,
+        description=(
+            "When search.wb.ru / card.wb.ru refuse both HTTP clients, read the same payload "
+            "from inside the operator's Chrome (CDP) on a www.wildberries.ru tab."
         ),
     )
     basket_fallback: str = Field(

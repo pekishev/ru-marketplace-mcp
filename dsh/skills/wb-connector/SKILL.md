@@ -5,8 +5,11 @@ description: Use this skill when the operator needs Wildberries data — product
 
 # Wildberries Connector
 
-Public WB internal APIs via `wb_*` tools. No credentials, light anti-bot, works
-from a residential IP without proxies.
+Public WB catalog APIs via `wb_*` tools. Catalog discovery does not require login.
+If both HTTP transports are refused, `WB_CDP_FALLBACK=1` (the default) reads known
+search/card routes inside the MCP Chrome profile. The browser keeps the WB edge
+token and device header current. This fallback does not prove account login;
+use `wb_session()` or explicit browser card mode for account context.
 
 ## When to use
 

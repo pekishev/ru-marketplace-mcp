@@ -374,6 +374,105 @@ async def _impersonated_get_text(url: str) -> tuple[int, str | None, str | None]
     return status, text, err
 
 
+# Measured 2026-09-30 from a Russian residential IP: search.wb.ru and card.wb.ru
+# refused curl_cffi (every profile), httpx and plain curl alike with a 403 from
+# the "wbaas" edge, and www.wildberries.ru answered 498 until its JS challenge
+# minted an x_wbaas_token cookie bound to the client's IP and User-Agent. The
+# site itself now reads the same payloads through same-origin proxies under
+# /__internal/, which accept that cookie plus a ``deviceid`` header the SPA
+# copies from localStorage (without it: 403). The token also goes stale within a
+# handful of requests when replayed outside the page, so the last resort is a
+# fetch inside a www.wildberries.ru tab of the operator's Chrome, where the
+# site's own script keeps both current. catalog.wb.ru has no /__internal/
+# counterpart (every candidate path answered 404), so it has no route here.
+_CDP_ORIGIN = "https://www.wildberries.ru"
+_CDP_ROUTES = (
+    ("search.wb.ru", "/exactmatch/ru/common/v9/search", "/__internal/u-search/exactmatch/ru/common/v18/search"),
+    ("card.wb.ru", "/cards/v4/detail", "/__internal/u-card/cards/v4/detail"),
+)
+# 498 is the edge asking for a fresh token: a new tab re-runs the challenge.
+_CDP_RETRY_STATUSES = frozenset({498})
+_cdp_fallback = _settings.cdp_fallback
+_cdp_lock = asyncio.Lock()
+
+_CDP_FETCH_JS = """async (args) => {
+    let device = '';
+    for (let i = 0; i < 40 && !device; i++) {
+        device = localStorage.getItem('wbx__sessionID') || '';
+        if (!device) await new Promise(r => setTimeout(r, 200));
+    }
+    if (!device) return JSON.stringify({status: 0, text: 'NO_DEVICE_ID'});
+    const res = await fetch(args.path, {
+        credentials: 'include',
+        headers: {'Accept': 'application/json', 'deviceid': device}
+    });
+    const reader = res.body.getReader();
+    let total = 0;
+    const chunks = [];
+    while (true) {
+        const {done, value} = await reader.read();
+        if (done) break;
+        total += value.length;
+        if (total > args.cap) return JSON.stringify({status: 0, text: 'BODY_CAP_EXCEEDED'});
+        chunks.push(value);
+    }
+    const buf = new Uint8Array(total);
+    let off = 0;
+    for (const c of chunks) { buf.set(c, off); off += c.length; }
+    return JSON.stringify({status: res.status, text: new TextDecoder().decode(buf)});
+}"""
+
+
+def _cdp_route(url: str) -> str | None:
+    """The same-origin /__internal/ path serving ``url``'s payload, if there is one."""
+
+    parts = urlsplit(url)
+    for host, path, internal in _CDP_ROUTES:
+        if parts.hostname == host and parts.path == path:
+            return f"{internal}?{parts.query}" if parts.query else internal
+    return None
+
+
+async def _cdp_get_text(url: str) -> tuple[int, str | None, str | None]:
+    """Read ``url``'s payload from inside the operator's Chrome, same contract as ``_safe_get_text``."""
+
+    path = _cdp_route(url)
+    if path is None:
+        return 0, None, "cdp: no route for this endpoint"
+    try:
+        from mcp_core.transport.chrome_cdp import NavBlocked, open_page
+    except ImportError:
+        return 0, None, "cdp: playwright is not installed"
+
+    result: tuple[int, str | None, str | None] = (0, None, "cdp: not attempted")
+    async with _cdp_lock:
+        for _ in range(2):
+            try:
+                async with open_page(f"{_CDP_ORIGIN}/", wait_ms=2500, allowed_hosts={"www.wildberries.ru"}) as page:
+                    raw = await asyncio.wait_for(
+                        page.evaluate(_CDP_FETCH_JS, {"path": path, "cap": MAX_BODY_BYTES}),
+                        timeout=30.0,
+                    )
+            except NavBlocked as exc:
+                return 0, None, f"cdp: navigation blocked (HTTP {exc.status})"
+            except TimeoutError:
+                result = (0, None, "timeout: cdp fetch did not finish within 30s")
+                continue
+            except Exception as exc:  # a challenge reload destroys the page's JS context mid-evaluate
+                result = (0, None, f"cdp: {type(exc).__name__}: {exc}")
+                continue
+            payload = json.loads(raw) if isinstance(raw, str) else raw
+            status = int(payload.get("status") or 0)
+            text = payload.get("text")
+            if status == 0:
+                return 0, None, f"cdp: {text}"
+            result = (status, text, None)
+            if status not in _CDP_RETRY_STATUSES:
+                break
+    log_event("wb_cdp.fetch", route=path.split("?", 1)[0], status=result[0], error=_redact(result[2] or ""))
+    return result
+
+
 class _PoliteGate:
     """Adapter exposing WB's module-level polite gate as a ``RateLimiter``.
 
@@ -456,6 +555,10 @@ async def _safe_get_text(client: httpx.AsyncClient, url: str) -> tuple[int, str 
             # bare timeout does.
             if _is_usable(fallback) or result[0] == 0:
                 result = fallback
+        if not _is_usable(result) and _cdp_fallback and _cdp_route(url) is not None:
+            cdp_result = await _cdp_get_text(url)
+            if _is_usable(cdp_result):
+                result = cdp_result
     else:
         result = await _budgeted_get_text(client, url)
 
