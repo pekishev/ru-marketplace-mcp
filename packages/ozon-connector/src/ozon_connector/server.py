@@ -54,6 +54,7 @@ from mcp_core.process import (
     worker_process_kwargs,
 )
 from mcp_core.redact import redact_error_text as _redact
+from mcp_core.runtime import browser_handoff_lifespan, current_mcp_session_id
 from mcp_core.transport import proxy_from_env
 from mcp_core.transport.chrome_cdp import NavBlocked, cdp_setup_hint, open_page
 from pydantic import Field
@@ -63,7 +64,9 @@ from ozon_connector.models_output import (
     OzonReviewsResponse,
     OzonSearchResponse,
     OzonSelfcheckResponse,
+    OzonSessionResponse,
 )
+from ozon_connector.session import browser_payload
 from ozon_connector.settings import get_settings
 
 SERVER_VERSION = "2.4.2"
@@ -72,6 +75,7 @@ SERVER_STARTED_AT = datetime.datetime.now(datetime.UTC).isoformat().replace("+00
 mcp = FastMCP(
     name="ozon-connector",
     version=SERVER_VERSION,
+    lifespan=browser_handoff_lifespan,
 )
 mcp.add_middleware(RetryMiddleware(max_retries=3, base_delay=1.0))
 
@@ -629,6 +633,12 @@ async def ozon_card(
         ),
     ],
     ctx: Context | None = None,
+    browser_session: Annotated[
+        bool,
+        Field(
+            description="Use live Chrome session, bypass anonymous HTTP/cache; include login proof and delivery estimate."
+        ),
+    ] = False,
 ) -> OzonCardResponse:
     """Fetch Ozon product card data via composer-api.bx.
 
@@ -640,7 +650,10 @@ async def ozon_card(
 
     OzonCardResponse: {status, price, card_price, price_original, is_available,
     rating_score, rating_count, title, seller, characteristics, url, tier_used,
-    meta} on success. Fields are None when the page does not carry them.
+    session, delivery, meta} on success. browser_session=True uses the current
+    Chrome profile without cache. session=null means NOT checked; never infer
+    login from tier_used. delivery is the displayed estimate for that browser's
+    delivery context; absence is null. No cookies, profile names or addresses are returned.
 
     ## Error Format
 
@@ -666,7 +679,12 @@ async def ozon_card(
         # _canonical_product_path_from_input returns (path, None) or (None, error),
         # and the error branch above raises — so the path is set by here.
         assert target_path is not None
-        status_code, body, tier = await _fetch_composer(target_path, ctx)
+        live = None
+        if browser_session:
+            live = await browser_payload(target_path, cap=MAX_BODY_BYTES, timeout=TIMEOUT)
+            status_code, body, tier = live["status"], json.dumps(live["payload"]), "cdp_session"
+        else:
+            status_code, body, tier = await _fetch_composer(target_path, ctx)
 
         if status_code == 0:
             raise_tool_error(
@@ -694,6 +712,9 @@ async def ozon_card(
             raise_tool_error(ParserDriftError("expected object payload with widgetStates object"))
 
         parsed = _parse_widgets(payload)
+        if live is not None:
+            parsed["session"] = live["session"]
+            parsed["delivery"] = live["delivery"]
         parsed["status"] = "success"
         parsed["url"] = f"https://www.ozon.ru{target_path}"
         parsed["tier_used"] = tier
@@ -1300,6 +1321,9 @@ async def ozon_search(
         ),
     ] = 1,
     ctx: Context | None = None,
+    browser_session: Annotated[
+        bool, Field(description="Use live Chrome session and bypass anonymous HTTP/cache; return login proof.")
+    ] = False,
 ) -> OzonSearchResponse:
     """Search Ozon catalog. Tier-1 curl_cffi → Tier-2 CDP fallback.
 
@@ -1309,7 +1333,8 @@ async def ozon_search(
     ## Return Format
 
     OzonSearchResponse: {status, query, page, tier_used, count, items, meta} on
-    success. Zero matching items is NOT an error — it returns a healthy response
+    success. browser_session=True bypasses anonymous HTTP/cache and adds live
+    session proof. Zero matching items is NOT an error — it returns a healthy response
     with count=0 and empty items.
 
     ## Error Format
@@ -1319,7 +1344,7 @@ async def ozon_search(
     """
     log_event("ozon_search.start", query=str(query)[:100], page=page)
     try:
-        result = await _ozon_search_impl(query, page, ctx)
+        result = await _ozon_search_impl(query, page, ctx, browser_session=browser_session)
         log_event("ozon_search.done", status=result.status, count=result.count)
         return result
     except ToolError:
@@ -1377,6 +1402,7 @@ async def _ozon_search_impl(
     query: str,
     page: int,
     ctx: Context | None,
+    browser_session: bool = False,
 ) -> OzonSearchResponse:
     """ozon_search implementation — kept separate so the public tool can wrap
     it in a catch-all that converts unexpected exceptions to a typed ToolError.
@@ -1389,7 +1415,12 @@ async def _ozon_search_impl(
     if ctx is not None:
         await ctx.info(f"ozon_search: {query} page={page}")
 
-    status_code, body, tier = await _fetch_composer(search_path, ctx)
+    live = None
+    if browser_session:
+        live = await browser_payload(_canonical_composer_path(search_path), cap=MAX_BODY_BYTES, timeout=TIMEOUT)
+        status_code, body, tier = live["status"], json.dumps(live["payload"]), "cdp_session"
+    else:
+        status_code, body, tier = await _fetch_composer(search_path, ctx)
 
     if status_code == 0:
         raise_tool_error(
@@ -1427,11 +1458,58 @@ async def _ozon_search_impl(
                 "tier_used": tier,
                 "count": len(items),
                 "items": items[:30],
+                "session": live["session"] if live is not None else None,
             },
             _aggregate_offer_warnings(items[:30]),
             source="ozon_search",
         )
     )
+
+
+@mcp.tool(
+    name="ozon_session",
+    annotations=ToolAnnotations(
+        title="Ozon Browser Session", readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=True
+    ),
+)
+async def ozon_session(
+    keep_open: Annotated[
+        bool,
+        Field(
+            description="Keep the same Chrome tab visible for manual login for up to five minutes if not authenticated. Retry this tool after login."
+        ),
+    ] = False,
+    ctx: Context | None = None,
+) -> OzonSessionResponse:
+    """Check login in the actual Ozon MCP Chrome profile, without cache.
+
+    ## Return Format
+
+    OzonSessionResponse: {status, session, _meta}. authenticated is true, false,
+    or null when the profile widget gives no unambiguous proof. No account name,
+    address, cookie or token is returned. keep_open=True retains a visible login
+    tab for five minutes; retry this tool to verify login and close that tab.
+
+    ## Error Format
+
+    Raises ToolError on unavailable browser, blocked navigation or invalid data.
+    """
+    try:
+        scope = current_mcp_session_id(ctx)
+        live = await browser_payload("/", cap=MAX_BODY_BYTES, timeout=TIMEOUT, scope=scope, keep_open=keep_open)
+        if live["status"] != 200:
+            raise_tool_error(
+                TransportDownError("Ozon session check did not return HTTP 200", status_code=live["status"])
+            )
+        # Cached anonymous bodies must never survive a manual re-login.
+        _cache.clear()
+        return OzonSessionResponse(
+            **R.attach_meta({"status": "success", "session": live["session"]}, [], source="ozon_session")
+        )
+    except ToolError:
+        raise
+    except Exception as exc:
+        raise_tool_error(TransportDownError(_redact(f"ozon_session failed: {exc}")))
 
 
 # CLI-only drift canary: ``marketplace-mcp doctor`` imports and calls ozon_selfcheck()

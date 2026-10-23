@@ -426,10 +426,11 @@ async def read_with_handoff(
     challenge: Challenge,
     allowed_hosts: Collection[str] | None = None,
     note_out: dict[str, Any] | None = None,
+    retention_s: float | None = None,
 ) -> Result:
     """Read once, or resume the exact same session's owned challenge tab.
 
-    Retention requires explicit positive CHROME_CHALLENGE_HANDOFF_S, a session
+    Retention requires positive CHROME_CHALLENGE_HANDOFF_S (or retention_s), a session
     scope and a headed browser. Expiry includes initial attach/navigation and is
     never extended by retries. The returned timestamp only describes retention;
     foreground activation is best-effort on the connected browser's machine.
@@ -441,6 +442,9 @@ async def read_with_handoff(
     is not the same as "nothing changed").
     """
     duration = _duration_s()
+    if retention_s is not None:
+        # Explicit login handoffs opt in per call, without mutating global env.
+        duration = min(retention_s, _MAX_LIFETIME_S) if math.isfinite(retention_s) and retention_s > 0 else 0
     if not duration or not scope or chrome_cdp.HEADLESS:
         async with chrome_cdp.open_page(url, wait_ms, allowed_hosts=allowed_hosts) as page:
             return await read(page), None

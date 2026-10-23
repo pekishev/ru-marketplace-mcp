@@ -978,12 +978,14 @@
         "_meta": {},
         "card_price": {},
         "characteristics": {},
+        "delivery": {},
         "is_available": {},
         "price": {},
         "price_original": {},
         "rating_count": {},
         "rating_score": {},
         "seller": {},
+        "session": {},
         "status": {},
         "tier_used": {},
         "title": {},
@@ -994,6 +996,10 @@
     "parameters": {
       "additionalProperties": false,
       "properties": {
+        "browser_session": {
+          "default": false,
+          "type": "boolean"
+        },
         "sku_or_path": {
           "type": "string"
         }
@@ -1057,6 +1063,7 @@
         "items": {},
         "page": {},
         "query": {},
+        "session": {},
         "status": {},
         "tier_used": {}
       },
@@ -1065,6 +1072,10 @@
     "parameters": {
       "additionalProperties": false,
       "properties": {
+        "browser_session": {
+          "default": false,
+          "type": "boolean"
+        },
         "page": {
           "default": 1,
           "type": "integer"
@@ -1076,6 +1087,26 @@
       "required": [
         "query"
       ],
+      "type": "object"
+    }
+  },
+  "ozon_session": {
+    "output": {
+      "properties": {
+        "_meta": {},
+        "session": {},
+        "status": {}
+      },
+      "type": "object"
+    },
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {
+        "keep_open": {
+          "default": false,
+          "type": "boolean"
+        }
+      },
       "type": "object"
     }
   },

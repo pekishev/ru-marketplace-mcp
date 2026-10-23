@@ -1,14 +1,14 @@
 ---
 name: ozon-connector
-description: Use this skill when the operator needs Ozon marketplace data — product details, search, prices, ratings, or reviews. Trigger on Russian queries like "найди на озоне", "цена ozon", "отзывы на озоне", or English mentions of Ozon. Tier 1 (TLS impersonation) handles most queries with no browser; Chrome CDP is only the tier-2 fallback when Cloudflare challenges. Skip for non-Ozon tasks.
+description: Use this skill when the operator needs Ozon marketplace data — product details, search, prices, ratings, or reviews. Trigger on Russian queries like "найди на озоне", "цена ozon", "отзывы на озоне", or English mentions of Ozon. Tier 1 (TLS impersonation) handles most queries with no browser; Chrome CDP supports explicit account/delivery checks and is the fallback when Cloudflare challenges. Skip for non-Ozon tasks.
 ---
 
 # Ozon Connector
 
 Two-tier connector. Tier 1 is `curl_cffi` with TLS impersonation and handles most
-queries — no browser involved. Only when Cloudflare serves a JS challenge does the
-fetch fall back to tier 2, inside the operator's logged-in Chrome over the DevTools
-Protocol. Plain curl/httpx fails outright (307 loop on the TLS fingerprint), which is
+queries — no browser involved. Cloudflare challenges fall back to Chrome over the
+DevTools Protocol. Explicit `browser_session=True` uses that profile directly,
+without anonymous HTTP or cache; using CDP alone does not prove login. Plain curl/httpx fails outright (307 loop on the TLS fingerprint), which is
 why tier 1 impersonates and tier 2 exists at all.
 
 ## Prerequisite
@@ -26,6 +26,17 @@ tier 1 usually answers and Chrome is never touched.
 - `ozon_card(sku_or_path)` — fetch full product card via composer-api.bx
 - `ozon_search(query, page)` — search Ozon catalog; `page` is 1..10, one page per call
 - `ozon_reviews(sku_or_path, limit, sort)` — product reviews
+- `ozon_session(keep_open=False)` — live login proof in the actual MCP Chrome
+  profile. `authenticated` is true, false, or null when unknown. `keep_open=True`
+  keeps its tab visible for manual login for up to five minutes; retry
+  `ozon_session()` afterwards to verify login and close the retained tab.
+
+For account-context prices and delivery, use
+`ozon_card(sku_or_path, browser_session=True)`. Search also accepts
+`browser_session=True`. The card returns `session` and the date in `delivery`.
+The estimate belongs to the browser's current delivery selection, which may
+still be city-level. Default reads leave `session=null` and do not prove account
+prices. Names, tokens, cookies and precise addresses are not returned.
 
 **Not an MCP tool:** `ozon_selfcheck()` is a drift canary: `success` means both
 tiers answered, `inconclusive` means Chrome was unreachable, `drift_detected`

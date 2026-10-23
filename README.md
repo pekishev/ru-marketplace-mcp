@@ -79,7 +79,7 @@ MPStats стоит особняком: это единственный **пла�
 git clone https://github.com/Vladimir-Human/ru-marketplace-mcp.git
 cd ru-marketplace-mcp
 uv sync --all-packages
-uv run pytest -q -m "not live and not cdp"   # 1851 офлайн-тестов, сеть не нужна
+uv run pytest -q -m "not live and not cdp"   # 1 870 офлайн-тестов, сеть не нужна
 ```
 
 Проверка живого эндпоинта:
@@ -575,7 +575,7 @@ TTL.
 
 ```bash
 uv sync --all-packages
-uv run pytest -q -m "not live and not cdp"    # 1851 офлайн-тестов
+uv run pytest -q -m "not live and not cdp"    # 1 870 офлайн-тестов
 uv run pytest -q -m "not live"                # то, что гоняет CI
 uv run pytest -q -m "not live" --cov          # покрытие, порог 70% в CI
 uv run ruff check . && uv run ruff format --check .
@@ -641,7 +641,7 @@ CI прогоняет тесты на Ubuntu, Windows и macOS против Pyth
 ## Как это сделано
 
 Код и документацию я писал вместе с ИИ-ассистентами. Они работают быстро и
-ошибаются уверенно, поэтому проект устроен вокруг проверки: 1851 офлайн-тестов,
+ошибаются уверенно, поэтому проект устроен вокруг проверки: 1 870 офлайн-тестов,
 аудит перед выпуском, тесты, которые прогоняют настоящий экстрактор по снятой с
 сайта разметке. В заметках к релизу перечислено, какие источники сверены с живыми
 страницами вручную и какие остались непроверенными.
@@ -728,7 +728,7 @@ Requires **Python 3.12+** and [uv](https://docs.astral.sh/uv/).
 git clone https://github.com/Vladimir-Human/ru-marketplace-mcp.git
 cd ru-marketplace-mcp
 uv sync --all-packages
-uv run pytest -q -m "not live and not cdp"    # 1851 offline tests, no network needed
+uv run pytest -q -m "not live and not cdp"    # 1 870 offline tests, no network needed
 ```
 
 Client configuration mirrors the Russian section above. Each server is a console
@@ -1089,7 +1089,7 @@ import, and `compare_prices` queries the same subset.
 
 ```bash
 uv sync --all-packages
-uv run pytest -q -m "not live and not cdp"    # 1851 offline tests
+uv run pytest -q -m "not live and not cdp"    # 1 870 offline tests
 uv run pytest -q -m "not live"                # what CI runs
 uv run pytest -q -m "not live" --cov          # coverage, CI enforces a 70% floor
 uv run ruff check . && uv run ruff format --check .
@@ -1151,7 +1151,7 @@ harvesting.
 ## How this was built
 
 I wrote the code and the documentation with AI assistants. They are fast and they
-are confidently wrong, so the project is arranged around verification: 1851 offline
+are confidently wrong, so the project is arranged around verification: 1 870 offline
 tests, an audit before the release, tests that run the real extractor against
 markup captured from the live site. The release notes say which sources were
 compared against live pages by hand and which were left unverified.
@@ -1171,3 +1171,21 @@ credit too: the full contributor and PR index is in
 ## License
 
 MIT, see [LICENSE](LICENSE).
+
+### Ozon browser session and delivery
+
+`ozon_session()` checks the actual MCP Chrome profile (not a separate in-app browser).
+`session.authenticated` is `true`, `false`, or `null` when proof is unavailable.
+`ozon_session(keep_open=True)` leaves its own tab visible for manual login for up to
+five minutes; call `ozon_session()` again afterwards to verify login and release it.
+No account name, cookies, tokens or precise delivery address are returned.
+
+Use `ozon_card(sku, browser_session=True)` for current account/browser prices and
+the delivery estimate displayed in that product's purchase button. Search also
+accepts `browser_session=True`. Both skip anonymous HTTP and the shared cache.
+Default reads retain the existing fast path; `session=null` means login was not
+checked. `delivery=null` means no estimate was found. The estimate belongs to the
+browser's selected delivery context, which may still be city-level, and is not a
+guaranteed arrival date. Review/account-derived prices must not be described as
+personalized solely because `tier_used=cdp`. Restart the MCP client after upgrading
+to refresh its tool schemas.

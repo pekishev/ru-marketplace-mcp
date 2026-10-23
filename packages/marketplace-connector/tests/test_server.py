@@ -56,8 +56,8 @@ def test_the_mounted_count_matches_the_imported_sources():
     # mounts. Operator-only *_selfcheck diagnostics are not MCP tools.
     own = {"marketplace_sources"}
     assert own <= names
-    assert len(tools) == 40, f"expected 39 mounted tools + 1 own, got {len(tools)}"
-    assert len(names - own) == 39
+    assert len(tools) == 41, f"expected 40 mounted tools + 1 own, got {len(tools)}"
+    assert len(names - own) == 40
 
 
 def test_marketplace_sources_reports_what_mounted():

@@ -25,6 +25,29 @@ class OzonSellerOut(BaseModel):
     link: str | None = Field(default=None, description="Seller profile link.")
 
 
+class OzonSessionOut(BaseModel):
+    authenticated: bool | None = None
+    status: str = "unknown"
+    evidence: str = "not_checked"
+    source: str = "chrome_cdp"
+    checked_at: str | None = None
+    login_tab_retained: bool = False
+    handoff_expires_at: str | None = None
+
+
+class OzonSessionResponse(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+    status: str = "success"
+    session: OzonSessionOut = Field(default_factory=OzonSessionOut)
+    meta: MetaOut = Field(default_factory=MetaOut, alias="_meta")
+
+
+class OzonDeliveryOut(BaseModel):
+    text: str
+    source: str
+    scope: str
+
+
 class OzonCardResponse(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
@@ -37,6 +60,12 @@ class OzonCardResponse(BaseModel):
     rating_count: int | None = Field(default=None, description="Total review count.")
     title: str | None = Field(default=None, description="Product title.")
     seller: OzonSellerOut | None = Field(default=None, description="Seller info.")
+    session: OzonSessionOut | None = Field(
+        default=None, description="Live browser login proof; null means not checked."
+    )
+    delivery: OzonDeliveryOut | None = Field(
+        default=None, description="Displayed delivery estimate for browser context, not a guarantee."
+    )
     characteristics: list[Any] = Field(default_factory=list, description="Short characteristics (max 30).")
     url: str = Field(default="", description="Canonical Ozon product URL.")
     tier_used: str = Field(default="", description="Fetch tier used: curl_cffi, cdp, etc.")
@@ -115,6 +144,9 @@ class OzonSearchResponse(BaseModel):
     page: int = Field(default=0, description="Search page number.")
     tier_used: str | None = Field(default=None, description="Fetch tier used.")
     count: int = Field(default=0, description="Number of items returned.")
+    session: OzonSessionOut | None = Field(
+        default=None, description="Live browser login proof; null means not checked."
+    )
     items: list[OzonSearchItemOut] = Field(default_factory=list, description="Search result items (max 30).")
     meta: MetaOut = Field(default_factory=MetaOut, alias="_meta", description="Validation metadata.")
 
