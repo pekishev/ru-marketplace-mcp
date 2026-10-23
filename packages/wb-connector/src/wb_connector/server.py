@@ -56,6 +56,7 @@ from mcp_core.logging import log_event
 from mcp_core.output_schema import apply_compact_output_schemas
 from mcp_core.pacing import Pacer
 from mcp_core.redact import redact_error_text as _redact
+from mcp_core.runtime import browser_handoff_lifespan, current_mcp_session_id
 from mcp_core.transport import get_text_budgeted, proxy_from_env
 from pydantic import Field
 
@@ -75,6 +76,7 @@ from wb_connector.models_output import (
     WbSearchResponse,
     WbSelfCheckResponse,
     WbSellerResponse,
+    WbSessionResponse,
 )
 from wb_connector.settings import get_settings
 
@@ -86,6 +88,7 @@ SERVER_STARTED_AT = datetime.datetime.now(datetime.UTC).isoformat().replace("+00
 mcp = FastMCP(
     name="wb-connector",
     version=SERVER_VERSION,
+    lifespan=browser_handoff_lifespan,
 )
 mcp.add_middleware(RetryMiddleware(max_retries=3, base_delay=1.0))
 
@@ -729,6 +732,12 @@ async def wb_card(
         ),
     ] = WB_DEFAULT_DEST,
     ctx: Context | None = None,
+    browser_session: Annotated[
+        bool,
+        Field(
+            description="Read live Chrome prices, availability and delivery for the selected address, bypassing API region/cache. Max 10 SKUs."
+        ),
+    ] = False,
 ) -> WbCardResponse:
     """Fetch product card data from WB v4 API.
 
@@ -741,7 +750,11 @@ async def wb_card(
     supplier, supplier_id, supplier_rating, review_rating, feedbacks,
     total_quantity, in_stock, price_rub, price_original_rub. price_rub is None
     when the SKU has no sellable price — never 0. Unknown SKUs are NOT an
-    error — they simply do not appear in items.
+    error — they simply do not appear in items. browser_session=True bypasses
+    anonymous API/cache and uses the current Chrome delivery selection. Items
+    then include session, availability and delivery. wallet_price_rub requires
+    WB wallet; it is never treated as the ordinary price_rub. dest="browser"
+    means the selected browser context, not the default Moscow region.
 
     ## Error Format
 
@@ -755,9 +768,10 @@ async def wb_card(
         dest: Region ID (default Moscow -1257786). Required for valid prices.
               Other examples: -1257786 Moscow, -1029256 Saint Petersburg.
     """
-    log_event("wb_card.start", nm_count=len(nm_ids), dest=dest)
+    context_dest = "browser" if browser_session else dest
+    log_event("wb_card.start", nm_count=len(nm_ids), dest=context_dest)
     if ctx is not None:
-        await ctx.info(f"wb_card: {len(nm_ids)} nm_ids dest={dest}")
+        await ctx.info(f"wb_card: {len(nm_ids)} nm_ids dest={context_dest}")
 
     if not nm_ids:
         log_event("wb_card.validation_failed", reason="empty_nm_ids")
@@ -768,6 +782,35 @@ async def wb_card(
     if any(isinstance(n, bool) or not isinstance(n, int) or n <= 0 for n in nm_ids):
         log_event("wb_card.validation_failed", reason="non_positive_nm_ids")
         raise_tool_error(BadRequestError("nm_ids must be positive integers"))
+
+    if browser_session:
+        if len(nm_ids) > 10:
+            raise_tool_error(BadRequestError("browser_session supports at most 10 nm_ids"))
+        try:
+            # Optional browser dependency stays lazy: HTTP-only WB still mounts.
+            from wb_connector.session import browser_read
+
+            browser_items = []
+            warnings = []
+            for nm in nm_ids:
+                row = await browser_read(nm)
+                browser_items.append(WbCardItem(**row))
+                if row["availability"] == "unknown":
+                    warnings.append(f"availability_unknown:{nm}: purchase block unavailable")
+                if row["session"]["authenticated"] is None:
+                    warnings.append(f"login_unknown:{nm}")
+                if row["availability"] == "available" and row["delivery"] is None:
+                    warnings.append(f"delivery_unknown:{nm}")
+            return WbCardResponse(
+                dest="browser",
+                count=len(browser_items),
+                items=browser_items,
+                meta=MetaOut(source="wb_card_browser", healthy=not warnings, warnings=warnings),
+            )
+        except ToolError:
+            raise
+        except Exception as exc:
+            raise_tool_error(TransportDownError(_redact(f"WB browser card failed: {exc}"), provider="wb"))
 
     nm_param = ";".join(str(n) for n in nm_ids)
     params = httpx.QueryParams(
@@ -2847,6 +2890,49 @@ async def wb_selfcheck(ctx: Context | None = None) -> WbSelfCheckResponse:
 # Advertised output schemas are the dominant constant cost of an MCP mount:
 # replace the full Pydantic tree with top-level field names (~64 % fewer
 # wire tokens on the unified server).
+@mcp.tool(
+    name="wb_session",
+    annotations=ToolAnnotations(
+        title="Wildberries Browser Session",
+        readOnlyHint=True,
+        destructiveHint=False,
+        idempotentHint=True,
+        openWorldHint=True,
+    ),
+)
+async def wb_session(
+    keep_open: Annotated[
+        bool,
+        Field(
+            description="Keep a visible WB tab for manual login for up to five minutes if not authenticated. Retry wb_session after login."
+        ),
+    ] = False,
+    ctx: Context | None = None,
+) -> WbSessionResponse:
+    """Check login in the actual MCP Chrome profile without reading credentials.
+
+    ## Return Format
+
+    WbSessionResponse: {status, session, meta}. authenticated is true, false,
+    or null if UI proof is missing. No cookies, account names, balances or exact
+    addresses are returned. keep_open=True retains its owned tab for manual
+    login for five minutes; call wb_session again to verify and release it.
+
+    ## Error Format
+
+    Raises ToolError for unavailable browser, blocked navigation or extraction errors.
+    """
+    try:
+        from wb_connector.session import browser_read
+
+        data = await browser_read(scope=current_mcp_session_id(ctx), keep_open=keep_open)
+        return WbSessionResponse(session=data["session"], meta=MetaOut(source="wb_session", healthy=True, warnings=[]))
+    except ToolError:
+        raise
+    except Exception as exc:
+        raise_tool_error(TransportDownError(_redact(f"wb_session failed: {exc}"), provider="wb"))
+
+
 apply_compact_output_schemas(mcp)
 
 

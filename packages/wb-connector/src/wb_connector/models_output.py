@@ -19,6 +19,28 @@ class MetaOut(MetaOutBase):
     """WB carries the shared envelope unchanged."""
 
 
+class WbSessionOut(BaseModel):
+    authenticated: bool | None = None
+    status: str = "unknown"
+    evidence: str = "not_checked"
+    source: str = "chrome_cdp"
+    checked_at: str | None = None
+    login_tab_retained: bool = False
+    handoff_expires_at: str | None = None
+
+
+class WbSessionResponse(BaseModel):
+    status: str = "success"
+    session: WbSessionOut = Field(default_factory=WbSessionOut)
+    meta: MetaOut = Field(default_factory=MetaOut)
+
+
+class WbDeliveryOut(BaseModel):
+    text: str
+    source: str
+    scope: str
+
+
 class WbCardItem(BaseModel):
     nm_id: int | None = Field(default=None, description="WB product nmId.")
     name: str = Field(default="", description="Product name (mojibake-decoded).")
@@ -35,12 +57,23 @@ class WbCardItem(BaseModel):
     in_stock: bool = Field(
         default=False,
         description=(
-            "True only when WB reports a positive quantity and a usable price. False also covers "
-            "'quantity not reported' — read total_quantity is None to tell an unknown from a sell-out."
+            "API mode: positive quantity and usable price. Browser mode: enabled purchase control and usable "
+            "regular or wallet price; total quantity may be unknown. Read availability for the explicit browser verdict."
         ),
     )
     price_rub: float | None = Field(default=None, description="Current price in rubles.")
     price_original_rub: float | None = Field(default=None, description="Strikethrough original price in rubles.")
+    wallet_price_rub: float | None = Field(
+        default=None, description="Price requiring WB wallet; never substituted for regular price."
+    )
+    price_context: str = Field(default="api_region", description="api_region or browser_delivery_context.")
+    availability: str | None = Field(
+        default=None, description="Browser verdict: available, unavailable, unknown; null if not checked."
+    )
+    delivery: WbDeliveryOut | None = Field(
+        default=None, description="Date displayed in this SKU's purchase block for browser delivery context."
+    )
+    session: WbSessionOut | None = Field(default=None, description="Live browser login proof; null means not checked.")
 
 
 class WbCardResponse(BaseModel):

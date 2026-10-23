@@ -21,6 +21,10 @@ from a residential IP without proxies.
 - `wb_search(query, page)` — text search. Returns up to 100 products per page
   with prices, stock, brand, seller and rating in one call.
 - `wb_card(nm_ids)` — batch fetch for up to 100 known SKUs (v4 API)
+- `wb_session(keep_open=False)` — live login proof in the actual MCP Chrome
+  profile. `authenticated` is true, false, or null when unknown. `keep_open=True`
+  retains its visible tab for manual login for up to five minutes; retry
+  `wb_session()` to verify login and close that tab.
 - `wb_root_info(nm_id)` — basket CDN: `imt_id` + `colors[]` + characteristics
 - `wb_reviews(imt_id, limit, sort)` — review pool **by imt_id, not nmId**
 - `wb_seller(supplier_id)` — registered entity, INN, KPP, OGRN, legal address,
@@ -42,6 +46,19 @@ from a residential IP without proxies.
 **Not an MCP tool:** `wb_selfcheck()` is a tri-state drift canary across every
 endpoint family. It is CLI-only — `marketplace-mcp doctor` runs every
 connector's canary at once.
+
+## Browser account and delivery context
+
+Use `wb_card(nm_ids=[...], browser_session=True)` for the browser's selected
+delivery address, up to ten SKUs per call. It bypasses anonymous HTTP and cache,
+reports `dest="browser"`, and returns per-item `session`, `availability` and
+`delivery`. `unavailable` means the offer is unavailable for that delivery
+selection even when the default Moscow API shows stock. `unknown` means the
+purchase block could not prove availability. No exact address is returned.
+
+`wallet_price_rub` requires WB wallet. It is never an ordinary `price_rub`.
+Missing prices or dates stay null; do not convert API `time1`/`time2` logistics
+values into calendar dates. Use the displayed purchase-block estimate.
 
 ## Workflow patterns
 

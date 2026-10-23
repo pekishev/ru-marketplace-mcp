@@ -26,7 +26,7 @@ def test_no_operator_selfcheck_is_registered_as_a_tool():
     # 34 to 36 when the aliexpress connector (2 tools) joined the mount, and
     # from 37 to 39 when the cian connector (2 tools) joined, then to 40 with
     # the comparison browser snapshot tool.
-    assert len(tools) == 41
+    assert len(tools) == 42
 
 
 def test_every_output_schema_is_wire_frugal():

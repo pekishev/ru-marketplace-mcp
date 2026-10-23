@@ -1188,6 +1188,10 @@
     "parameters": {
       "additionalProperties": false,
       "properties": {
+        "browser_session": {
+          "default": false,
+          "type": "boolean"
+        },
         "dest": {
           "default": "-1257786",
           "type": "string"
@@ -1454,6 +1458,26 @@
       "required": [
         "supplier_id"
       ],
+      "type": "object"
+    }
+  },
+  "wb_session": {
+    "output": {
+      "properties": {
+        "meta": {},
+        "session": {},
+        "status": {}
+      },
+      "type": "object"
+    },
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {
+        "keep_open": {
+          "default": false,
+          "type": "boolean"
+        }
+      },
       "type": "object"
     }
   },
